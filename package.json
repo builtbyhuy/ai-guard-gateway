@@ -1,0 +1,26 @@
+{
+  "name": "@builtbyhuy/ai-guard-gateway",
+  "version": "1.0.0",
+  "description": "Enterprise LLM Security Proxy, Prompt Injection Guard & Multi-Provider Circuit Breaker",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "llm",
+    "ai-gateway",
+    "prompt-injection",
+    "circuit-breaker",
+    "rate-limiting",
+    "security"
+  ],
+  "author": "Hồ Khắc Huy <hohuyblon@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "typescript": "^5.5.2",
+    "vitest": "^2.0.0"
+  }
+}
