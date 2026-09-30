@@ -1,124 +1,100 @@
-# AI Guard Gateway — Enterprise LLM Security Proxy & Fallback Router
+# AI Guard Gateway — Heuristic Filtering and Fallback Sample
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5+-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Security: OWASP Top 10 for LLM](https://img.shields.io/badge/OWASP%20LLM-Compliant-brightgreen.svg)](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
 
-An enterprise-grade reverse proxy and resilience gateway for Large Language Model (LLM) APIs, providing **Prompt Injection Defenses**, **Token-Bucket Rate Limiting**, **Exact-Hash Semantic Caching**, and **Multi-Provider Circuit Breaker Fallbacks**.
+A TypeScript library experiment combining prompt-pattern heuristics, in-memory
+token buckets, a hash-keyed response cache and ordered provider callbacks with
+circuit-breaker state.
 
----
+This is an independent local sample. It is not an HTTP reverse proxy, an OWASP
+certification, a complete prompt-injection defense or a connected-provider
+reliability result.
 
-## Architecture Flow
+## Implementation
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client
-    participant Gateway as AI Guard Gateway
-    participant Guard as Prompt Injection Guard
-    participant Cache as SHA-256 Hash Cache
-    participant Primary as OpenAI (Primary)
-    participant Fallback as Anthropic (Fallback)
+- `PromptGuard` assigns weights to a small set of regex patterns and a
+  zero-width-character heuristic. A score threshold decides whether to allow
+  the prompt; detection and blocking are different results.
+- `TokenBucketLimiter` keeps caller-key buckets in process memory.
+- `ExactHashCache` hashes model, temperature and trimmed prompt text. This
+  is hash-keyed caching, not semantic retrieval.
+- `AIGuardGateway` tries registered callbacks in order, recording failures and
+  moving to another available callback after an exception.
+- Counters expose requests, blocked prompts, rate limits, cache hits and fallbacks.
 
-    Client->>Gateway: POST /v1/chat/completions
-    Gateway->>Gateway: Rate Limit Check (Token-Bucket)
-    Gateway->>Guard: Security Heuristics Inspection
-    alt Injection Detected
-        Guard-->>Client: 403 Forbidden (Flagged pattern)
-    else Safe Prompt
-        Gateway->>Cache: Lookup Hash(Model + Prompt)
-        alt Cache Hit
-            Cache-->>Client: 200 OK (Cached Response < 5ms)
-        else Cache Miss
-            Gateway->>Primary: Execute LLM Request
-            alt Primary Fails (503 / Timeout)
-                Primary-->>Gateway: Circuit Breaker Records Failure
-                Gateway->>Fallback: Seamless Fallback Execution
-                Fallback-->>Gateway: 200 OK
-                Gateway->>Cache: Save Response
-                Gateway-->>Client: 200 OK (Served via Anthropic)
-            else Primary Succeeds
-                Primary-->>Gateway: 200 OK
-                Gateway->>Cache: Save Response
-                Gateway-->>Client: 200 OK
-            end
-        end
-    end
-```
-
----
-
-## Key Capabilities
-
-1. **Prompt Injection & Jailbreak Defense (OWASP LLM01):**
-   - Detects system prompt overrides, delimiter spoofing (`[SYSTEM]`), DAN roleplay jailbreaks, and steganography attacks.
-2. **Deterministic Multi-Provider Failover:**
-   - Automatically trips circuit breaker after configurable consecutive errors (5xx or timeouts) and routes traffic to secondary providers (Anthropic, Gemini, or local models).
-3. **Exact-Hash Caching (SHA-256):**
-   - Dramatically cuts API token costs and lowers response latency to sub-5ms for deterministic queries.
-4. **Token-Bucket Rate Limiter:**
-   - Granular per-key quotas with burst absorption and sliding-window replenishment.
-
----
-
-## Empirical Performance Benchmark
-
-Measured natively on Apple Silicon (10,000 prompt scans & 5,000 cache hits):
-
-| Metric | Unprotected Direct API Call | PromptShield Security Proxy | Performance / Safety Gain |
-| :--- | :--- | :--- | :--- |
-| **Jailbreak / Injection Defense** | 0% *(Attacker exfiltrates system prompt)* | **100% Intercepted (1.64M scans/s)** | Zero unauthorized prompt override |
-| **Inspection Overhead (p50)** | N/A | **0.0004 ms (0.4 µs)** | Imperceptible proxy latency |
-| **Inspection Tail (p99)** | N/A | **0.0013 ms (1.3 µs)** | Sub-microsecond deterministic scan |
-| **Exact-Match Cache Hit Latency** | 650–1,200 ms *(Upstream LLM network)* | **0.0010 ms (1 µs, 690k reads/s)** | **>600,000x speedup** on repeated queries |
-| **Cache Hit Cost** | $0.005–$0.03 / 1k tokens | **$0.0000 (Local Zero Cost)** | 100% token cost elimination |
-
-*Reproducible via: `npx tsx benchmarks/bench_proxy.ts`*
-
----
-
-## Quickstart
+## Quick start
 
 ```bash
 git clone https://github.com/builtbyhuy/ai-guard-gateway.git
 cd ai-guard-gateway
-npm install
+npm ci
 npm test
 npm run build
 ```
 
-### Usage Example
-
 ```typescript
-import { AIGuardGateway } from "@builtbyhuy/ai-guard-gateway";
+import { AIGuardGateway } from "./src/gateway.js";
 
 const gateway = new AIGuardGateway({
   rateLimitCapacity: 50,
   refillRatePerSec: 10,
 });
 
-// Register primary and fallback providers
-gateway.registerProvider("openai", async (prompt, model) => {
-  // Call OpenAI API...
-  return "Response from OpenAI";
+gateway.registerProvider("local-example", async (prompt, model) => {
+  return `Synthetic response for ${model}: ${prompt}`;
 });
 
-gateway.registerProvider("anthropic", async (prompt, model) => {
-  // Call Anthropic API...
-  return "Fallback response from Claude";
-});
-
-// Execute request with security & resilience
 const response = await gateway.execute({
-  apiKey: "tenant_corp_key",
-  model: "gpt-4o",
-  prompt: "Analyze the security perimeter of our Kubernetes cluster.",
+  apiKey: "demo-caller",
+  model: "demo-model",
+  prompt: "Summarize this synthetic example",
 });
 
-console.log(`Served by: ${response.providerUsed} (Cached: ${response.cached})`);
+console.log(response.providerUsed, response.cached);
 ```
 
----
+Provider callbacks are supplied by the caller. Registering a callback does not
+connect OpenAI, Anthropic or another service automatically; the checked-in
+example and tests use synthetic responses.
+
+## Verification scope
+
+The checked-in tests cover selected benign and attack strings, token-bucket
+capacity, a failing primary callback followed by a successful fallback, and
+repeated cache hits. They do not establish general jailbreak resistance,
+real-provider failover or distributed quota enforcement. Run the suite on the
+revision being reviewed; no fresh execution result is asserted here.
+
+## Benchmark scope
+
+```bash
+npx tsx benchmarks/bench_proxy.ts
+```
+
+The script times repeated heuristic inspections and 5,000 warm-cache gateway
+calls using a synthetic provider callback. It does not call a paid LLM API or
+measure network response times. The inspection loop does not assert detection
+accuracy and visits only a subset of its listed prompts. It therefore cannot
+establish a 100% attack-blocking rate, a network speedup or financial savings.
+
+## Known limitations
+
+- Pattern matching can miss attacks and flag ordinary text. Threat scores
+  are manually assigned heuristics, not calibrated probabilities.
+- The cache key excludes caller and provider identity. Do not assume tenant
+  isolation or equivalent outputs from different providers.
+- Hash input uses delimiter concatenation and prompt trimming; arbitrary
+  model/prompt strings are not encoded with an unambiguous structured format.
+- Limiters, caches, circuit state and counters are per-process and disappear
+  on restart. There is no shared distributed state.
+- Provider callbacks have no built-in request timeout, cancellation contract
+  or provider-specific model mapping. The request temperature affects the cache
+  key but is not passed to the callback by this interface.
+- The included circuit breaker does not limit half-open probes to one caller.
+- Production authentication, provider integrations, adversarial evaluation and
+  operational monitoring require separate implementation and verification.
 
 ## License
+
 MIT © [Hồ Khắc Huy](https://github.com/builtbyhuy)
